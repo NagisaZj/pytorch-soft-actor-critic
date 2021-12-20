@@ -7,6 +7,8 @@ import torch
 from sac import SAC
 from torch.utils.tensorboard import SummaryWriter
 from replay_memory import ReplayMemory
+import json
+import metaworld, random
 
 parser = argparse.ArgumentParser(description='PyTorch Soft Actor-Critic Args')
 parser.add_argument('--env-name', default="HalfCheetah-v2",
@@ -42,26 +44,43 @@ parser.add_argument('--target_update_interval', type=int, default=1, metavar='N'
                     help='Value target update per no. of updates per step (default: 1)')
 parser.add_argument('--replay_size', type=int, default=1000000, metavar='N',
                     help='size of replay buffer (default: 10000000)')
+parser.add_argument('--fix_task', type=int, default=0,
+                    help='fix task')
 parser.add_argument('--cuda', action="store_true",
                     help='run on CUDA (default: False)')
+parser.add_argument('--device', type=str, default="cuda:0", help='cuda device')
 args = parser.parse_args()
 
 # Environment
 # env = NormalizedActions(gym.make(args.env_name))
-env = gym.make(args.env_name)
+# env = gym.make(args.env_name)
+
+mt1 = metaworld.MT1(args.env_name)  # Construct the benchmark, sampling tasks
+
+env = mt1.train_classes[args.env_name]()  # Create an environment with task `pick_place`
+task = random.choice(mt1.train_tasks)
+env.set_task(task)
+
 env.seed(args.seed)
+env._max_episode_steps = 500
 env.action_space.seed(args.seed)
 
 torch.manual_seed(args.seed)
 np.random.seed(args.seed)
 
 # Agent
+# print(env.observation_space.shape[0])
 agent = SAC(env.observation_space.shape[0], env.action_space, args)
 
-#Tesnorboard
-writer = SummaryWriter('runs/{}_SAC_{}_{}_{}'.format(datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S"), args.env_name,
-                                                             args.policy, "autotune" if args.automatic_entropy_tuning else ""))
+savepath = 'runs/{}_SAC_{}_{}_{}'.format(datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S"), args.env_name,args.policy, "autotune" if args.automatic_entropy_tuning else "")
 
+
+
+#Tesnorboard
+writer = SummaryWriter(savepath)
+
+with open(savepath+'/args.json','w') as f:
+    json.dump(args.__dict__,f)
 # Memory
 memory = ReplayMemory(args.replay_size, args.seed)
 
@@ -74,6 +93,9 @@ for i_episode in itertools.count(1):
     episode_steps = 0
     done = False
     state = env.reset()
+    if not args.fix_task:
+        task = random.choice(mt1.train_tasks)
+        env.set_task(task)
 
     while not done:
         if args.start_steps > total_numsteps:
@@ -96,6 +118,8 @@ for i_episode in itertools.count(1):
 
         next_state, reward, done, _ = env.step(action) # Step
         episode_steps += 1
+        if episode_steps ==500:
+            done = True
         total_numsteps += 1
         episode_reward += reward
 
@@ -112,30 +136,43 @@ for i_episode in itertools.count(1):
 
     writer.add_scalar('reward/train', episode_reward, i_episode)
     print("Episode: {}, total numsteps: {}, episode steps: {}, reward: {}".format(i_episode, total_numsteps, episode_steps, round(episode_reward, 2)))
-
+    if i_episode % 1000 ==0:
+        torch.save(agent,savepath+'/agent.pt')
+        agent = torch.load(savepath+'/agent.pt', map_location=args.device)
     if i_episode % 10 == 0 and args.eval is True:
         avg_reward = 0.
         episodes = 10
+        avg_success = 0.0
         for _  in range(episodes):
             state = env.reset()
+            if not args.fix_task:
+                task = random.choice(mt1.train_tasks)
+                env.set_task(task)
             episode_reward = 0
             done = False
             while not done:
                 action = agent.select_action(state, evaluate=True)
 
-                next_state, reward, done, _ = env.step(action)
+                next_state, reward, done, info = env.step(action)
+                if episode_steps == 500:
+                    done = True
                 episode_reward += reward
 
 
                 state = next_state
             avg_reward += episode_reward
+            if 'success' in info.keys():
+                avg_success += info['success']
         avg_reward /= episodes
+        avg_success /= episodes
 
 
         writer.add_scalar('avg_reward/test', avg_reward, i_episode)
+        writer.add_scalar('avg_success/test', avg_success, i_episode)
 
         print("----------------------------------------")
         print("Test Episodes: {}, Avg. Reward: {}".format(episodes, round(avg_reward, 2)))
+        print("Test Episodes: {}, Avg. Success: {}".format(episodes, round(avg_success, 2)))
         print("----------------------------------------")
 
 env.close()

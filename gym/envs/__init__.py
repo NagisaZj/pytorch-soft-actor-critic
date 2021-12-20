@@ -321,6 +321,18 @@ register(
 )
 
 register(
+    id='HumanoidSparse-v2',
+    entry_point='gym.envs.mujoco:HumanoidSparseEnv',
+    max_episode_steps=1000,
+)
+
+register(
+    id='HumanoidGoal-v2',
+    entry_point='gym.envs.mujoco:HumanoidGoalEnv',
+    max_episode_steps=1000,
+)
+
+register(
     id='Humanoid-v3',
     entry_point='gym.envs.mujoco.humanoid_v3:HumanoidEnv',
     max_episode_steps=1000,
